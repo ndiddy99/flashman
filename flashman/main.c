@@ -1,178 +1,139 @@
 /* Flashman: Alternative FlashBoy client
-* Copyright(C) 2021 Nathan Misner
+*  Copyright (C) 2021  Nathan Misner
 *
-* This program is free software; you can redistribute it and/or
-* modify it under the terms of the GNU General Public License as
-* published by the Free Software Foundation.
+*  This program is free software: you can redistribute it and/or modify
+*  it under the terms of the GNU General Public License as published by
+*  the Free Software Foundation, either version 3 of the License, or
+*  (at your option) any later version.
 *
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
-* GNU General Public License for more details.
+*  This program is distributed in the hope that it will be useful,
+*  but WITHOUT ANY WARRANTY; without even the implied warranty of
+*  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*  GNU General Public License for more details.
+*
+*  You should have received a copy of the GNU General Public License
+*  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <wchar.h>
 
-#include "hidapi.h"
-typedef struct hid_device_info hid_device_info;
+#include "db.h"
+#include "flashboy.h"
 
-#define FLASHBOY_VID (0x1781)
-#define FLASHBOY_PID (0x09a2)
-
-#define FLASHBOY_SIZE (0x200000)
-#define CHUNK_SIZE (0x400)
-
-#define CMD_ERASE (0xA1)
-#define CMD_STARTWRITE (0xB0)
-#define CMD_WRITE1K (0xB4)
-
-void clear_cmd(uint8_t *cmd) {
-	for (int i = 0; i < 65; i++) {
-		cmd[i] = 0;
-	}
+void print_usage() {
+	printf("Usage: flashman rom.vb\n");
+	printf("Optional parameters:\n");
+	printf("-s: forces write to front of flash (used by some third-party games)\n");
+	printf("-e: forces write to end of flash (used by Nintendo games and some third-party)\n");
+	printf("By default, Flashman uses an internal database of VB games to choose which\n");
+	printf("option to use.\n");
 }
 
-int erase(hid_device *flashboy) {
-	uint8_t cmd[65];
-	uint8_t response;
+int db_lookup(uint8_t *rom_buff, int rom_len) {
+	uint8_t *header = rom_buff + rom_len - HEADER_OFFSET;
+	printf("%s\n", header);
 
-	clear_cmd(cmd);
-	cmd[1] = CMD_ERASE;
-	hid_write(flashboy, cmd, 65);
-	hid_read(flashboy, &response, 1);
-	return response == CMD_ERASE;
-}
-
-int write(hid_device *flashboy, FILE *rom_file) {
-	// load the rom into memory
-	fseek(rom_file, 0, SEEK_END);
-	size_t rom_size = ftell(rom_file);
-	rewind(rom_file);
-	uint8_t *rom_buff = malloc(rom_size);
-	if (rom_buff == NULL) {
-		printf("Out of memory!\n");
-		return 0;
+	for (int i = 0; i < (sizeof(games) / sizeof(games[0])); i++) {
+		if (!memcmp(header, games[i]->name, 20)) {
+			printf("Game mode: %d\n", games[i]->flash_mode);
+			return games[i]->flash_mode;
+		}
 	}
-	fread(rom_buff, sizeof(uint8_t), rom_size, rom_file);
-
-	// tell the flashboy to start writing
-	uint8_t cmd[65];
-	clear_cmd(cmd);
-	cmd[1] = CMD_STARTWRITE;
-	hid_write(flashboy, cmd, 65);
-
-	// write the rom in 1K chunks
-	for (int i = 0; i < FLASHBOY_SIZE; i += CHUNK_SIZE) {
-		clear_cmd(cmd);
-		cmd[1] = CMD_WRITE1K;
-		hid_write(flashboy, cmd, 65);
-
-		// write vector table
-		if (i == (FLASHBOY_SIZE - CHUNK_SIZE)) {
-			for (int j = 0; j < CHUNK_SIZE; j += 64) {
-				memcpy(cmd + 1, &rom_buff[rom_size - CHUNK_SIZE + j], 64);
-				hid_write(flashboy, cmd, 65);
-			}
-		}
-		// write FF's (faster than mirroring)
-		else if (i > (int)rom_size) {
-			memset(cmd + 1, 0xFF, 64);
-			for (int j = 0; j < CHUNK_SIZE; j += 64) {
-				hid_write(flashboy, cmd, 65);
-			}
-		}
-		else {
-			for (int j = i; j < (i + CHUNK_SIZE); j += 64) {
-				memcpy(cmd + 1, &rom_buff[j], 64);
-				hid_write(flashboy, cmd, 65);
-			}
-		}
-
-		uint8_t response;
-		hid_read(flashboy, &response, 1);
-		if (response != CMD_WRITE1K) {
-			printf("Error writing!\n");
-			free(rom_buff);
-			return 0;
-		}
-		else {
-			printf("%d\n", i);
-		}
-
-	}
-
-
-	free(rom_buff);
-	return 1;
 }
 
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		printf("Usage: flashman rom.vb\n");
+		print_usage();
 		return -1;
 	}
 
-	hid_init();
+	int flash_mode = MODE_DB;
+	char *filename = NULL;
 
-	hid_device_info *info = hid_enumerate(FLASHBOY_VID, FLASHBOY_PID);
-	if (info == NULL) {
-		printf("Flashboy not found.\n");
-		return -1;
-	}
+	for (int i = 1; i < argc; i++) {
+		switch (*(argv[i] + 1)) {
+		case 's':
+		case 'S':
+			flash_mode = MODE_START;
+			break;
 
-	setlocale(LC_ALL, ""); // needed because product_string is a wchar_t
+		case 'e':
+		case 'E':
+			flash_mode = MODE_END;
+			break;
 
-	wchar_t *serial = NULL;
-	while (info) {
-		printf("%ls\n", info->product_string);
-		if (wcscmp(info->product_string, L"FlashBoy") == 0) {
-			serial = info->serial_number;
+		default:
+			filename = argv[i];
 			break;
 		}
-		info = info->next;
 	}
 
-	if (serial == NULL) {
-		printf("Flashboy not found.\n");
+	if (filename == NULL) {
+		print_usage();
 		return -1;
 	}
 
-	printf("Flashboy found!\n");
-
-	hid_device *flashboy = hid_open(FLASHBOY_VID, FLASHBOY_PID, serial);
-	if (flashboy == NULL) {
-		printf("Error opening Flashboy!\n");
-		return -1;
-	}
-
-	FILE *rom_file = fopen(argv[1], "rb");
+	// open the rom
+	FILE *rom_file = fopen(filename, "rb");
 	if (rom_file == NULL) {
-		printf("Error opening ROM file %s\n", argv[1]);
+		printf("Error opening ROM file %s\n", filename);
 		return -1;
 	}
-
-	printf("Erasing, please wait...\n");
-	if (!erase(flashboy)) {
-		printf("Error erasing!\n");
-		fclose(rom_file);
-		hid_close(flashboy);
+	fseek(rom_file, 0, SEEK_END);
+	int rom_size = (int)ftell(rom_file);
+	rewind(rom_file);
+	uint8_t *rom_buff = malloc(rom_size);
+	if (rom_buff == NULL) {
+		printf("Out of memory!\n");
 		return -1;
 	}
-	printf("Successfully erased Flashboy.\n");
+	fread(rom_buff, sizeof(uint8_t), rom_size, rom_file);
+	fclose(rom_file);
 
-	printf("Writing rom...\n");
-	if (!write(flashboy, rom_file)) {
-		printf("Error writing!\n");
-		fclose(rom_file);
-		hid_close(flashboy);
-		return -1;
+	db_lookup(rom_buff, rom_size);
+
+	// open the flashboy
+	if (!fb_open()) {
+		printf("Error opening Flashboy!\n");
+		goto err_fb_open;
 	}
-	printf("Successfully wrote rom\n");
+	printf("Opened Flashboy!\n");
 
-	hid_close(flashboy);
+	// erase the rom
+	printf("Erasing...\n");
+	if (!fb_erase()) {
+		printf("Error erasing Flashboy!\n");
+		goto err_exit;
+	}
+
+	// write the rom
+	if (flash_mode == MODE_DB) {
+		flash_mode = db_lookup(rom_buff, rom_size);
+	}
+	printf("Writing (mode %d)...\n", flash_mode);
+	if (flash_mode == 1) {
+		if (!fb_write_start(rom_buff, rom_size)) {
+			printf("Error writing!\n");
+			goto err_exit;
+		}
+	}
+	else {
+		if (!fb_write_end(rom_buff, rom_size)) {
+			printf("Error writing!\n");
+			goto err_exit;
+		}
+	}
+
+	printf("Successfully wrote ROM.\n");
+	fb_close();
+	free(rom_buff);
 	return 0;
+
+err_exit:
+	fb_close();
+err_fb_open:
+	free(rom_buff);
+	return -1;
 }

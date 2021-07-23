@@ -18,9 +18,18 @@
     <ClCompile Include="main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="flashboy.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="hidapi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="flashboy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="db.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
