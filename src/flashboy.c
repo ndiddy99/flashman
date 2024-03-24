@@ -43,24 +43,6 @@ int fb_open(void) {
         return 0;
     }
 
-//	setlocale(LC_ALL, ""); // needed because product_string is a wchar_t
-//
-//	// search for the flashboy in the connected devices with the given ID
-//	wchar_t *serial = NULL;
-//	while (info) {
-//        if (info->product_string) {
-//            printf("%ls\n", info->product_string);
-//            if (wcscmp(info->product_string, L"FlashBoy") == 0) {
-//                serial = info->serial_number;
-//                break;
-//            }
-//        }
-//		info = info->next;
-//	}
-//	if (serial == NULL) {
-//		return 0;
-//	}
-
 	// open the flashboy
 	flashboy = hid_open(FLASHBOY_VID, FLASHBOY_PID, NULL);
 	if (flashboy == NULL) {
